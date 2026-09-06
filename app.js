@@ -20,6 +20,7 @@ function defaultState() {
   return {
     settings: { chapters: null, exercises: null, types: null,
                 shuffle: true, onlyWrong: false, onlyUnseen: false,
+                installDismissed: false,
                 openSections: { filters: false, settings: false } },
     stats: {},      // cardId -> { seen, correct, wrong, last }
     session: null   // { ids, i, answers, mode }
@@ -752,6 +753,109 @@ function renderMissing() {
   show('screen-missing');
 }
 
+/* ── Install (PWA) ─────────────────────────────────────── */
+
+// Chromium fires beforeinstallprompt when the app is installable; the event is
+// the only way to open the native dialog, so it gets stashed until the user taps.
+let deferredPrompt = null;
+
+function isStandalone() {
+  return (window.matchMedia && (window.matchMedia('(display-mode: standalone)').matches ||
+                                window.matchMedia('(display-mode: fullscreen)').matches)) ||
+         window.navigator.standalone === true;
+}
+
+// iPadOS 13+ reports as MacIntel, so touch points are the reliable tell.
+function isIOS() {
+  const ua = navigator.userAgent || '';
+  return /iPad|iPhone|iPod/.test(ua) ||
+         (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function shouldShowInstall() {
+  return !isStandalone() && !state.settings.installDismissed;
+}
+
+const SHARE_ICON =
+  '<svg class="step-icon" viewBox="0 0 24 24" aria-hidden="true">' +
+  '<path d="M7 10H5v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9h-2"/>' +
+  '<path d="M12 15V4"/><path d="M8.5 7.5 12 4l3.5 3.5"/></svg>';
+
+const ADD_ICON =
+  '<svg class="step-icon" viewBox="0 0 24 24" aria-hidden="true">' +
+  '<rect x="4" y="4" width="16" height="16" rx="4"/>' +
+  '<path d="M12 9v6M9 12h6"/></svg>';
+
+function iosStepsHTML() {
+  return '<p class="install-note">Στο iPhone και στο iPad η εγκατάσταση γίνεται από το Safari, ' +
+         'σε δύο βήματα:</p>' +
+         '<ol class="install-steps">' +
+           '<li><span class="step-n">1</span>' +
+             '<span class="step-txt">Πάτα το <b>Κοινή χρήση</b> στη μπάρα του Safari</span>' +
+             SHARE_ICON + '</li>' +
+           '<li><span class="step-n">2</span>' +
+             '<span class="step-txt">Διάλεξε <b>«Πρόσθεση στην αρχική οθόνη»</b></span>' +
+             ADD_ICON + '</li>' +
+         '</ol>';
+}
+
+function genericHintHTML() {
+  return '<p class="install-note">Άνοιξε το μενού του browser και διάλεξε ' +
+         '<b>«Εγκατάσταση εφαρμογής»</b> ή <b>«Προσθήκη στην αρχική οθόνη»</b>.</p>';
+}
+
+function renderInstall() {
+  const btn = $('btn-install');
+  const help = $('install-help');
+  if (deferredPrompt) {
+    btn.hidden = false;
+    help.innerHTML = '';
+  } else {
+    btn.hidden = true;
+    help.innerHTML = isIOS() ? iosStepsHTML() : genericHintHTML();
+  }
+}
+
+async function doInstall() {
+  if (!deferredPrompt) return;
+  const promptEvent = deferredPrompt;
+  deferredPrompt = null;            // a captured prompt can only be used once
+  promptEvent.prompt();
+  let outcome = 'dismissed';
+  try { outcome = (await promptEvent.userChoice).outcome; } catch (e) { /* ignore */ }
+  if (outcome === 'accepted') {
+    dismissInstall();
+  } else {
+    renderInstall();                // falls back to the browser-menu hint
+  }
+}
+
+function dismissInstall() {
+  state.settings.installDismissed = true;
+  saveState();
+  updateInstallLink();
+  renderHome(true);
+  show('screen-home');
+}
+
+function updateInstallLink() {
+  const b = $('btn-install-again');
+  if (b) b.hidden = isStandalone();
+}
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+  if (!$('screen-install').hidden) renderInstall();
+});
+
+window.addEventListener('appinstalled', () => {
+  deferredPrompt = null;
+  if (!$('screen-install').hidden) dismissInstall();
+  else { state.settings.installDismissed = true; saveState(); }
+  updateInstallLink();
+});
+
 /* ── Wiring ────────────────────────────────────────────── */
 
 function wire() {
@@ -764,6 +868,9 @@ function wire() {
   on('btn-quit', 'click', () => { renderHome(true); show('screen-home'); });
   on('btn-home', 'click', () => { renderHome(true); show('screen-home'); });
   on('btn-missing', 'click', renderMissing);
+  on('btn-install', 'click', doInstall);
+  on('btn-skip-install', 'click', dismissInstall);
+  on('btn-install-again', 'click', () => { renderInstall(); show('screen-install'); });
   on('btn-missing-back', 'click', () => { renderHome(true); show('screen-home'); });
 
   // Remember which sections the user left open.
@@ -818,8 +925,10 @@ async function boot() {
   $('boot').hidden = true;
   $('app').hidden = false;
   wire();
+  updateInstallLink();
   renderHome(true);
-  show('screen-home');
+  if (shouldShowInstall()) { renderInstall(); show('screen-install'); }
+  else show('screen-home');
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});

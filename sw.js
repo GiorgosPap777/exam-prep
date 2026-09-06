@@ -1,5 +1,5 @@
 /* Offline support. Bump CACHE_VERSION whenever questions.json or the shell changes. */
-const CACHE_VERSION = 'chemquiz-v3';
+const CACHE_VERSION = 'chemquiz-v4';
 const SHELL = [
   './',
   'index.html',

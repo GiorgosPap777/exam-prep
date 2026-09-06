@@ -287,6 +287,80 @@ button, input { font: inherit; color: inherit; touch-action: manipulation; }
 .link-btn.danger { color: var(--bad); }
 .footer-links { display: flex; justify-content: space-between; margin-top: 10px; }
 
+/* ── Install screen ─────────────────────────────────────── */
+.install-screen { text-align: center; padding-top: max(40px, env(safe-area-inset-top)); }
+
+.install-mark img {
+  border-radius: 24px;
+  box-shadow: var(--shadow-3);
+  animation: pop .5s var(--ease-spring) both;
+}
+.install-title {
+  margin: 20px 0 0; font-size: 34px; font-weight: 800; letter-spacing: -.03em;
+  background: var(--accent-grad);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.install-tagline {
+  margin: 8px auto 0; max-width: 22em;
+  color: var(--text-dim); font-size: 16px; line-height: 1.45;
+}
+
+.install-perks {
+  list-style: none; margin: 26px auto 0; padding: 0;
+  max-width: 20em; text-align: left;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.install-perks li { display: flex; align-items: center; gap: 12px; font-size: 15px; }
+.perk-tick {
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--accent-tint);
+  position: relative;
+}
+.perk-tick::after {
+  content: ''; position: absolute; left: 7px; top: 4px;
+  width: 5px; height: 10px;
+  border-right: 2.2px solid var(--accent);
+  border-bottom: 2.2px solid var(--accent);
+  transform: rotate(42deg);
+}
+
+.install-note {
+  margin: 26px auto 0; max-width: 24em;
+  color: var(--text-dim); font-size: 15px; line-height: 1.5;
+}
+.install-note b { color: var(--text); font-weight: 650; }
+
+.install-steps {
+  list-style: none; margin: 16px auto 0; padding: 0;
+  max-width: 24em;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.install-steps li {
+  display: flex; align-items: center; gap: 12px; text-align: left;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-1);
+  padding: 12px 14px;
+}
+.step-n {
+  flex: none; width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--accent-grad); color: #fff;
+  font-size: 13px; font-weight: 800;
+}
+.step-txt { flex: 1; font-size: 15px; line-height: 1.35; }
+.step-txt b { font-weight: 700; }
+.step-icon {
+  flex: none; width: 26px; height: 26px;
+  fill: none; stroke: var(--accent); stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* Stacked variant of the bottom bar: primary action with a quiet escape below. */
+.actions-sticky.stacked { flex-direction: column; gap: 2px; }
+.actions-sticky.stacked .btn { width: 100%; }
+
 /* ── Quiz bar ───────────────────────────────────────────── */
 .quiz-bar {
   display: flex; align-items: center; gap: 14px;

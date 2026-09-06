@@ -26,6 +26,28 @@
 
 <div id="app" hidden>
 
+  <!-- ── ΕΓΚΑΤΑΣΤΑΣΗ ──────────────────────────────────────── -->
+  <section id="screen-install" class="screen install-screen" hidden>
+    <div class="install-mark">
+      <img src="icons/icon-192.png" alt="" width="88" height="88">
+    </div>
+    <h1 class="install-title">Χημεία</h1>
+    <p class="install-tagline">Βάλ' την στην αρχική σου οθόνη και κάνε εξάσκηση παντού.</p>
+
+    <ul class="install-perks">
+      <li><span class="perk-tick" aria-hidden="true"></span>Δουλεύει χωρίς σύνδεση στο ίντερνετ</li>
+      <li><span class="perk-tick" aria-hidden="true"></span>Ανοίγει σε πλήρη οθόνη, χωρίς μπάρες</li>
+      <li><span class="perk-tick" aria-hidden="true"></span>Δικό της εικονίδιο στην αρχική οθόνη</li>
+    </ul>
+
+    <div id="install-help"></div>
+
+    <div class="actions-sticky stacked">
+      <button class="btn btn-primary" id="btn-install" type="button" hidden>Εγκατάσταση εφαρμογής</button>
+      <button class="link-btn" id="btn-skip-install" type="button">Συνέχεια στον browser</button>
+    </div>
+  </section>
+
   <!-- ── ΑΡΧΙΚΗ ───────────────────────────────────────────── -->
   <section id="screen-home" class="screen">
     <header class="app-header">
@@ -73,6 +95,7 @@
 
     <div class="footer-links">
       <button class="link-btn" id="btn-missing" type="button">Λείπουν κείμενα</button>
+      <button class="link-btn" id="btn-install-again" type="button" hidden>Εγκατάσταση</button>
       <button class="link-btn danger" id="btn-reset" type="button">Μηδενισμός προόδου</button>
     </div>
 
