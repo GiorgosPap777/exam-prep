@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#6366F1">
+<title>Χημεία — Εξάσκηση</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Χημεία">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- Shared gradient defs for the progress rings -->
+<svg class="svg-defs" aria-hidden="true" focusable="false">
+  <defs>
+    <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"   stop-color="var(--accent-1)"/>
+      <stop offset="100%" stop-color="var(--accent-2)"/>
+    </linearGradient>
+  </defs>
+</svg>
+
+<div id="app" hidden>
+
+  <!-- ── ΑΡΧΙΚΗ ───────────────────────────────────────────── -->
+  <section id="screen-home" class="screen">
+    <header class="app-header">
+      <h1>Χημεία</h1>
+      <p class="subtitle">Εξάσκηση σε ερωτήσεις κεφαλαίου</p>
+    </header>
+
+    <div class="hero" id="home-stats"></div>
+
+    <details class="section" id="sec-filters">
+      <summary>
+        <span class="sec-title">Φίλτρα</span>
+        <span class="sec-state" id="sum-filters"></span>
+        <span class="chev" aria-hidden="true"></span>
+      </summary>
+      <div class="sec-body">
+        <div class="sec-head"><h3>Κεφάλαιο</h3></div>
+        <div class="chips" id="filter-chapters"></div>
+
+        <div class="sec-head">
+          <h3>Άσκηση</h3>
+          <button class="link-btn" id="btn-toggle-all-ex" type="button">Επιλογή όλων</button>
+        </div>
+        <div class="chips" id="filter-exercises"></div>
+
+        <div class="sec-head"><h3>Τύπος ερώτησης</h3></div>
+        <div class="chips" id="filter-types"></div>
+      </div>
+    </details>
+
+    <details class="section" id="sec-settings">
+      <summary>
+        <span class="sec-title">Ρυθμίσεις</span>
+        <span class="sec-state" id="sum-settings"></span>
+        <span class="chev" aria-hidden="true"></span>
+      </summary>
+      <div class="sec-body">
+        <label class="switch"><input type="checkbox" id="opt-shuffle"><span>Τυχαία σειρά</span></label>
+        <label class="switch"><input type="checkbox" id="opt-only-wrong"><span>Μόνο όσες έχω λάθος</span></label>
+        <label class="switch"><input type="checkbox" id="opt-only-unseen"><span>Μόνο αναπάντητες</span></label>
+      </div>
+    </details>
+
+    <p class="pool-count" id="pool-count"></p>
+
+    <div class="footer-links">
+      <button class="link-btn" id="btn-missing" type="button">Λείπουν κείμενα</button>
+      <button class="link-btn danger" id="btn-reset" type="button">Μηδενισμός προόδου</button>
+    </div>
+
+    <div class="actions-sticky">
+      <button class="btn btn-secondary" id="btn-resume" type="button" hidden>Συνέχεια</button>
+      <button class="btn btn-primary" id="btn-start" type="button">Έναρξη</button>
+    </div>
+  </section>
+
+  <!-- ── ΑΣΚΗΣΗ ───────────────────────────────────────────── -->
+  <section id="screen-quiz" class="screen" hidden>
+    <div class="quiz-bar">
+      <button class="icon-btn" id="btn-quit" type="button" aria-label="Πίσω">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <div class="progress"><div class="progress-fill" id="progress-fill"></div></div>
+      <span class="score" id="score"></span>
+    </div>
+
+    <main class="card-wrap" id="card-wrap"></main>
+
+    <div class="actions-sticky">
+      <button class="btn btn-primary" id="btn-next" type="button" hidden>Επόμενη</button>
+    </div>
+  </section>
+
+  <!-- ── ΑΠΟΤΕΛΕΣΜΑΤΑ ─────────────────────────────────────── -->
+  <section id="screen-results" class="screen" hidden>
+    <div id="results-body"></div>
+    <div class="actions-sticky">
+      <button class="btn btn-secondary" id="btn-practice-wrong" type="button" hidden>Εξάσκηση στα λάθη</button>
+      <button class="btn btn-primary" id="btn-home" type="button">Αρχική</button>
+    </div>
+  </section>
+
+  <!-- ── ΛΕΙΠΟΥΝ ΚΕΙΜΕΝΑ ──────────────────────────────────── -->
+  <section id="screen-missing" class="screen" hidden>
+    <header class="app-header">
+      <h1>Λείπουν κείμενα</h1>
+      <p class="subtitle">Ασκήσεις που έχουν απαντήσεις αλλά όχι εκφώνηση</p>
+    </header>
+    <div id="missing-body"></div>
+    <div class="actions-sticky">
+      <button class="btn btn-primary" id="btn-missing-back" type="button">Πίσω</button>
+    </div>
+  </section>
+
+</div>
+
+<div id="boot" class="boot">
+  <p id="boot-msg">Φόρτωση…</p>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

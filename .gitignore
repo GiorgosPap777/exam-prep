@@ -1,0 +1,9 @@
+# Textbook page photos: transcription source material, ~35 MB, and scans of a
+# copyrighted book. They stay on the local machine and out of the repo.
+*.jpg
+*.jpeg
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
