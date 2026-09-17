@@ -1,14 +1,15 @@
-# Χημεία Quiz — static PWA. No build step, no dependencies.
+# Exam Prep — static PWA. No build step, no dependencies.
 FROM nginx:1.27-alpine
 
-LABEL org.opencontainers.image.title="Chemistry-app" \
-      org.opencontainers.image.description="Phone-first PWA for drilling Greek chemistry textbook questions." \
-      org.opencontainers.image.source="https://github.com/GiorgosPap777/Chemistry-app"
+LABEL org.opencontainers.image.title="exam-prep" \
+      org.opencontainers.image.description="Phone-first PWA for drilling Greek school textbook questions across subjects." \
+      org.opencontainers.image.source="https://github.com/GiorgosPap777/exam-prep"
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 WORKDIR /usr/share/nginx/html
-COPY index.html styles.css app.js questions.json manifest.webmanifest sw.js ./
+COPY index.html styles.css app.js manifest.webmanifest sw.js ./
+COPY data/ ./data/
 COPY icons/ ./icons/
 
 EXPOSE 80

@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#6366F1">
-<title>Χημεία — Εξάσκηση</title>
+<title>Exam Prep</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Χημεία">
+<meta name="apple-mobile-web-app-title" content="Exam Prep">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -31,7 +31,7 @@
     <div class="install-mark">
       <img src="icons/icon-192.png" alt="" width="88" height="88">
     </div>
-    <h1 class="install-title">Χημεία</h1>
+    <h1 class="install-title">Exam Prep</h1>
     <p class="install-tagline">Βάλ' την στην αρχική σου οθόνη και κάνε εξάσκηση παντού.</p>
 
     <ul class="install-perks">
@@ -48,35 +48,17 @@
     </div>
   </section>
 
-  <!-- ── ΑΡΧΙΚΗ ───────────────────────────────────────────── -->
+  <!-- ── ΑΡΧΙΚΗ: ΜΑΘΗΜΑΤΑ ─────────────────────────────────── -->
   <section id="screen-home" class="screen">
     <header class="app-header">
-      <h1>Χημεία</h1>
-      <p class="subtitle">Εξάσκηση σε ερωτήσεις κεφαλαίου</p>
+      <h1>Exam Prep</h1>
+      <p class="subtitle">Εξάσκηση σε ερωτήσεις από τα σχολικά βιβλία</p>
     </header>
 
     <div class="hero" id="home-stats"></div>
 
-    <details class="section" id="sec-filters">
-      <summary>
-        <span class="sec-title">Φίλτρα</span>
-        <span class="sec-state" id="sum-filters"></span>
-        <span class="chev" aria-hidden="true"></span>
-      </summary>
-      <div class="sec-body">
-        <div class="sec-head"><h3>Κεφάλαιο</h3></div>
-        <div class="chips" id="filter-chapters"></div>
-
-        <div class="sec-head">
-          <h3>Άσκηση</h3>
-          <button class="link-btn" id="btn-toggle-all-ex" type="button">Επιλογή όλων</button>
-        </div>
-        <div class="chips" id="filter-exercises"></div>
-
-        <div class="sec-head"><h3>Τύπος ερώτησης</h3></div>
-        <div class="chips" id="filter-types"></div>
-      </div>
-    </details>
+    <div class="sec-head bare"><h3>Μαθήματα</h3></div>
+    <div class="card-list" id="subject-list"></div>
 
     <details class="section" id="sec-settings">
       <summary>
@@ -88,10 +70,11 @@
         <label class="switch"><input type="checkbox" id="opt-shuffle"><span>Τυχαία σειρά</span></label>
         <label class="switch"><input type="checkbox" id="opt-only-wrong"><span>Μόνο όσες έχω λάθος</span></label>
         <label class="switch"><input type="checkbox" id="opt-only-unseen"><span>Μόνο αναπάντητες</span></label>
+
+        <div class="sec-head"><h3>Τύπος ερώτησης</h3></div>
+        <div class="chips" id="filter-types"></div>
       </div>
     </details>
-
-    <p class="pool-count" id="pool-count"></p>
 
     <div class="footer-links">
       <button class="link-btn" id="btn-missing" type="button">Λείπουν κείμενα</button>
@@ -99,9 +82,57 @@
       <button class="link-btn danger" id="btn-reset" type="button">Μηδενισμός προόδου</button>
     </div>
 
+    <!-- No cross-subject start: a session is always inside one μάθημα, so the only
+         thing this bar can offer is picking up an unfinished one. -->
+    <div class="actions-sticky" id="home-actions" hidden>
+      <button class="btn btn-primary" id="btn-resume" type="button" hidden>Συνέχεια</button>
+    </div>
+  </section>
+
+  <!-- ── ΜΑΘΗΜΑ: ΚΕΦΑΛΑΙΑ ─────────────────────────────────── -->
+  <section id="screen-subject" class="screen" hidden>
+    <div class="nav-bar">
+      <button class="icon-btn" id="btn-subject-back" type="button" aria-label="Πίσω">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <h2 id="subject-title"></h2>
+    </div>
+
+    <div class="hero" id="subject-stats"></div>
+
+    <div class="sec-head bare">
+      <h3>Κεφάλαια</h3>
+      <button class="link-btn" id="btn-toggle-all-ch" type="button">Επιλογή όλων</button>
+    </div>
+    <div class="card-list" id="chapter-list"></div>
+
+    <p class="pool-count" id="subject-pool"></p>
+
     <div class="actions-sticky">
-      <button class="btn btn-secondary" id="btn-resume" type="button" hidden>Συνέχεια</button>
-      <button class="btn btn-primary" id="btn-start" type="button">Έναρξη</button>
+      <button class="btn btn-primary" id="btn-start-subject" type="button">Έναρξη</button>
+    </div>
+  </section>
+
+  <!-- ── ΚΕΦΑΛΑΙΟ: ΑΣΚΗΣΕΙΣ ───────────────────────────────── -->
+  <section id="screen-chapter" class="screen" hidden>
+    <div class="nav-bar">
+      <button class="icon-btn" id="btn-chapter-back" type="button" aria-label="Πίσω">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <h2 id="chapter-title"></h2>
+    </div>
+    <p class="nav-sub" id="chapter-sub"></p>
+
+    <div class="sec-head bare">
+      <h3>Ασκήσεις</h3>
+      <button class="link-btn" id="btn-toggle-all-ex" type="button">Επιλογή όλων</button>
+    </div>
+    <div class="chips" id="filter-exercises"></div>
+
+    <p class="pool-count" id="chapter-pool"></p>
+
+    <div class="actions-sticky">
+      <button class="btn btn-primary" id="btn-start-chapter" type="button">Έναρξη</button>
     </div>
   </section>
 

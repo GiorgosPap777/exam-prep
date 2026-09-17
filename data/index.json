@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "subjects": [
+    {
+      "id": "chem",
+      "title": "Χημεία",
+      "file": "data/chemistry.json",
+      "color": "#6366F1",
+      "autoFormat": "chemistry"
+    }
+  ]
+}

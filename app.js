@@ -1,7 +1,11 @@
-/* Χημεία Quiz — offline practice app. No dependencies. */
+/* Exam Prep — offline practice app. No dependencies. */
 'use strict';
 
-const STORAGE_KEY = 'chemquiz.v1';
+const STORAGE_KEY = 'examprep.v2';
+// The v1 bank was chemistry-only and its card ids carried no subject prefix.
+const LEGACY_KEY = 'chemquiz.v1';
+const LEGACY_SUBJECT = 'chem';
+
 const GREEK_SEQ = ['α','β','γ','δ','ε','στ','ζ','η','θ','ι','κ','λ'];
 const ROMAN_SEQ = ['i','ii','iii','iv','v','vi','vii','viii','ix','x'];
 const TYPE_NAMES = {
@@ -9,19 +13,26 @@ const TYPE_NAMES = {
   true_false_set: 'Σωστό / Λάθος',
   matching: 'Αντιστοίχιση'
 };
+// Used when a subject in data/index.json does not name its own colour.
+const SUBJECT_COLORS = ['#6366F1', '#0EA5E9', '#F59E0B', '#EC4899', '#10B981', '#8B5CF6'];
 
-let BANK = null;
-let CARDS = [];
+let BANK = null;    // { subjects: [ { id, title, color, autoFormat, chapters } ] }
+let CARDS = [];     // flat, one entry per drillable card
+let TREE = null;    // subjects -> chapters -> exercises, with their cards
 let state = null;
+let freshState = false;
+
+// Where in the picker the user currently is. Not persisted: every launch starts home.
+let nav = { screen: 'home', subjectId: null, chapterKey: null };
 
 /* ── Storage ───────────────────────────────────────────── */
 
 function defaultState() {
   return {
-    settings: { chapters: null, exercises: null, types: null,
+    settings: { exercises: null, types: null,
                 shuffle: true, onlyWrong: false, onlyUnseen: false,
                 installDismissed: false,
-                openSections: { filters: false, settings: false } },
+                openSections: { settings: false } },
     stats: {},      // cardId -> { seen, correct, wrong, last }
     session: null   // { ids, i, answers, mode }
   };
@@ -30,15 +41,16 @@ function defaultState() {
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultState();
+    if (!raw) { freshState = true; return defaultState(); }
     const parsed = JSON.parse(raw);
     const merged = Object.assign(defaultState(), parsed);
     // Settings gained keys over time — merge rather than replace wholesale.
     merged.settings = Object.assign(defaultState().settings, parsed.settings || {});
     merged.settings.openSections = Object.assign(
-      { filters: false, settings: false }, (parsed.settings || {}).openSections || {});
+      { settings: false }, (parsed.settings || {}).openSections || {});
     return merged;
   } catch (e) {
+    freshState = true;
     return defaultState();
   }
 }
@@ -47,22 +59,87 @@ function saveState() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* full or blocked */ }
 }
 
-/* ── Chemistry formatting ──────────────────────────────── */
+// One-time lift of the chemistry-only v1 progress into the namespaced v2 layout.
+// Runs after the bank is loaded, because expanding an old chapter filter into
+// exercise keys needs to know which exercises that chapter holds. The old key is
+// deliberately left in place as a rollback path.
+function migrateLegacy() {
+  let raw = null;
+  try { raw = localStorage.getItem(LEGACY_KEY); } catch (e) { return false; }
+  if (!raw) return false;
+
+  let old;
+  try { old = JSON.parse(raw); } catch (e) { return false; }
+
+  const P = (id) => LEGACY_SUBJECT + '/' + id;
+  const oldSettings = old.settings || {};
+
+  state.settings.shuffle = oldSettings.shuffle !== false;
+  state.settings.onlyWrong = !!oldSettings.onlyWrong;
+  state.settings.onlyUnseen = !!oldSettings.onlyUnseen;
+  state.settings.installDismissed = !!oldSettings.installDismissed;
+  state.settings.types = Array.isArray(oldSettings.types) ? oldSettings.types.slice() : null;
+
+  for (const [k, v] of Object.entries(old.stats || {})) state.stats[P(k)] = v;
+
+  if (old.session && Array.isArray(old.session.ids)) {
+    const answers = {};
+    for (const [k, v] of Object.entries(old.session.answers || {})) answers[P(k)] = v;
+    state.session = {
+      ids: old.session.ids.map(P),
+      i: old.session.i || 0,
+      answers,
+      mode: old.session.mode || 'practice'
+    };
+  }
+
+  // Old selection: `exercises` was a list of bare ids, `chapters` a list of chapter ids.
+  let sel = null;
+  if (Array.isArray(oldSettings.exercises)) sel = new Set(oldSettings.exercises.map(P));
+  if (Array.isArray(oldSettings.chapters)) {
+    const chapterKeys = new Set(oldSettings.chapters.map(P));
+    const fromChapters = new Set(
+      CARDS.filter((c) => chapterKeys.has(c.chapterKey)).map((c) => c.exKey));
+    sel = sel ? new Set([...sel].filter((k) => fromChapters.has(k))) : fromChapters;
+  }
+  setSelection(sel ? allExerciseKeys().filter((k) => sel.has(k)) : null);
+
+  saveState();
+  return true;
+}
+
+/* ── Formula formatting ────────────────────────────────── */
 
 function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// Renders CO2 -> CO₂, [Cu(NH3)4]2+ -> [Cu(NH₃)₄]²⁺, Mr -> M_r, H2O(s) -> H₂O₍s₎.
-// Only fires on Latin-script runs, so Greek prose passes through untouched.
-function formatChem(text) {
-  let s = esc(text);
+// Explicit markup, understood in every subject:  m/s^2  10^-3  v_0  a_{max}
+// Only fires before "{…}" or a signed number, so a stray underscore in prose is safe.
+function applyScripts(s) {
+  s = s.replace(/\^\{([^{}]*)\}/g, '<sup>$1</sup>');
+  s = s.replace(/_\{([^{}]*)\}/g, '<sub>$1</sub>');
+  s = s.replace(/\^([+−-]?\d+)/g, '<sup>$1</sup>');
+  s = s.replace(/_([+−-]?\d+)/g, '<sub>$1</sub>');
+  return s;
+}
+
+// Chemistry writes formulas as plain ASCII, so the subscripts are inferred:
+// CO2 -> CO₂, [Cu(NH3)4]2+ -> [Cu(NH₃)₄]²⁺, Mr -> M_r, H2O(s) -> H₂O₍s₎.
+// Only fires on Latin-script runs, so Greek prose passes through untouched. This is
+// wrong for physics (m/s2 is an exponent, not an index), so it is opt-in per subject.
+function chemRules(s) {
   s = s.replace(/\](\d*)([+−-])/g, ']<sup>$1$2</sup>');           // ]2+
   s = s.replace(/([A-Za-z])(\d+)([+−])/g, '$1<sup>$2$3</sup>');   // Fe2+
-  s = s.replace(/([A-Za-z)\]])(\d+)/g, '$1<sub>$2</sub>');             // CO2, (CH3)4
+  s = s.replace(/([A-Za-z)\]])(\d+)/g, '$1<sub>$2</sub>');        // CO2, (CH3)4
   s = s.replace(/\bMr\b/g, 'M<sub>r</sub>');
   s = s.replace(/\s?\((aq|s|g|l|ℓ)\)/g, '<sub>($1)</sub>');       // H2O(s)
   return s;
+}
+
+function formatSci(text, autoFormat) {
+  const s = applyScripts(esc(text));
+  return autoFormat === 'chemistry' ? chemRules(s) : s;
 }
 
 function lewisHTML(spec) {
@@ -74,16 +151,9 @@ function lewisHTML(spec) {
     '</span>';
 }
 
-function optionHTML(value) {
+function optionHTML(value, autoFormat) {
   if (value && typeof value === 'object' && value.lewis) return lewisHTML(value.lewis);
-  return formatChem(value);
-}
-
-function optionPlain(value) {
-  if (value && typeof value === 'object' && value.lewis) {
-    return 'το ' + value.lewis.symbol;
-  }
-  return String(value);
+  return formatSci(value, autoFormat);
 }
 
 function sortLabels(labels) {
@@ -94,6 +164,12 @@ function sortLabels(labels) {
   return labels.slice().sort((a, b) => seq.indexOf(a) - seq.indexOf(b));
 }
 
+// Colours come from a data file, but they are interpolated into a style attribute,
+// so anything that is not a plain hex literal is dropped.
+function safeColor(c) {
+  return typeof c === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c) ? c : null;
+}
+
 /* ── Progress rings & counters ─────────────────────────── */
 
 function reducedMotion() {
@@ -101,14 +177,16 @@ function reducedMotion() {
 }
 
 // Circular progress ring; pct === null renders an empty ring.
-function progressRing(pct, size, stroke) {
+function progressRing(pct, size, stroke, color) {
   const r = 50 - stroke / 2;
   const circ = 2 * Math.PI * r;
   const target = circ * (1 - (pct || 0) / 100);
+  const tint = safeColor(color);
   return `<svg class="ring" viewBox="0 0 100 100" width="${size}" height="${size}" aria-hidden="true">` +
     `<circle class="ring-track" cx="50" cy="50" r="${r}" stroke-width="${stroke}"/>` +
     `<circle class="ring-bar" cx="50" cy="50" r="${r}" stroke-width="${stroke}" ` +
-    `stroke-dasharray="${circ.toFixed(2)}" style="stroke-dashoffset:${circ.toFixed(2)}" ` +
+    `stroke-dasharray="${circ.toFixed(2)}" ` +
+    `style="stroke-dashoffset:${circ.toFixed(2)}${tint ? ';stroke:' + tint : ''}" ` +
     `data-target="${target.toFixed(2)}"/></svg>`;
 }
 
@@ -146,90 +224,216 @@ function animateStats(root, animate) {
 
 function buildCards(bank) {
   const out = [];
-  for (const ch of bank.chapters) {
-    for (const q of ch.questions) {
-      const base = {
-        chapterId: ch.id, chapterTitle: ch.title, exId: q.id,
-        section: q.section || null, type: q.type,
-        instructions: q.instructions || ''
-      };
-      if (q.needs_question_text) continue;
+  for (const subject of bank.subjects) {
+    for (const ch of subject.chapters) {
+      for (const q of ch.questions || []) {
+        // Ids are namespaced by subject: Χημεία 1.87 and Φυσική 1.87 are different
+        // cards, and the id is the localStorage key, so the prefix cannot be dropped.
+        const base = {
+          subjectId: subject.id, subjectTitle: subject.title, subjectColor: subject.color,
+          autoFormat: subject.autoFormat,
+          chapterKey: subject.id + '/' + ch.id, chapterTitle: ch.title,
+          exId: q.id, exKey: subject.id + '/' + q.id,
+          section: q.section || null, type: q.type,
+          instructions: q.instructions || ''
+        };
+        if (q.needs_question_text) continue;
 
-      if (q.type === 'single_choice_set') {
-        for (const it of q.items || []) {
-          if (!it.stem || !it.options) continue;
+        if (q.type === 'single_choice_set') {
+          for (const it of q.items || []) {
+            if (!it.stem || !it.options) continue;
+            out.push(Object.assign({}, base, {
+              // A one-part question has no sub-label — its α/β/γ/δ are the options,
+              // so the card is the exercise itself and the badge shows just "1.11".
+              id: base.exKey + (it.label ? ':' + it.label : ''),
+              label: it.label || null,
+              stem: it.stem,
+              options: sortLabels(Object.keys(it.options)).map((l) => ({ label: l, value: it.options[l] })),
+              correct: it.correct,
+              explanation: it.explanation || null
+            }));
+          }
+        } else if (q.type === 'true_false_set') {
+          const trueSet = new Set(q.correct_labels || []);
+          for (const it of q.items || []) {
+            if (!it.text) continue;
+            out.push(Object.assign({}, base, {
+              id: base.exKey + ':' + it.label,
+              label: it.label,
+              stem: it.text,
+              twoUp: true,
+              options: [
+                { label: 'true', value: 'Σωστό' },
+                { label: 'false', value: 'Λάθος' }
+              ],
+              correct: trueSet.has(it.label) ? 'true' : 'false',
+              explanation: it.explanation || null
+            }));
+          }
+        } else if (q.type === 'matching') {
+          if (!Array.isArray(q.left) || !Array.isArray(q.right)) continue;
+          // A matching exercise is solved as a whole — you pick each pair by comparing
+          // it against the others and eliminating. Splitting it into one card per row
+          // makes it unsolvable, so the whole exercise is a single card.
+          const pairs = q.left
+            .filter((l) => l.label in (q.correct || {}))
+            .map((l) => ({ label: l.label, text: l.text,
+                           correct: q.correct[l.label], explanation: l.explanation || null }));
+          if (!pairs.length) continue;
           out.push(Object.assign({}, base, {
-            id: q.id + ':' + it.label,
-            label: it.label,
-            stem: it.stem,
-            options: sortLabels(Object.keys(it.options)).map((l) => ({ label: l, value: it.options[l] })),
-            correct: it.correct,
-            explanation: it.explanation || null
+            id: base.exKey,
+            label: null,
+            matching: true,
+            pairs,
+            options: q.right.map((r) => ({ label: r.label, value: r.text }))
           }));
         }
-      } else if (q.type === 'true_false_set') {
-        const trueSet = new Set(q.correct_labels || []);
-        for (const it of q.items || []) {
-          if (!it.text) continue;
-          out.push(Object.assign({}, base, {
-            id: q.id + ':' + it.label,
-            label: it.label,
-            stem: it.text,
-            twoUp: true,
-            options: [
-              { label: 'true', value: 'Σωστό' },
-              { label: 'false', value: 'Λάθος' }
-            ],
-            correct: trueSet.has(it.label) ? 'true' : 'false',
-            explanation: it.explanation || null
-          }));
-        }
-      } else if (q.type === 'matching') {
-        if (!Array.isArray(q.left) || !Array.isArray(q.right)) continue;
-        // A matching exercise is solved as a whole — you pick each pair by comparing
-        // it against the others and eliminating. Splitting it into one card per row
-        // makes it unsolvable, so the whole exercise is a single card.
-        const pairs = q.left
-          .filter((l) => l.label in (q.correct || {}))
-          .map((l) => ({ label: l.label, text: l.text,
-                         correct: q.correct[l.label], explanation: l.explanation || null }));
-        if (!pairs.length) continue;
-        out.push(Object.assign({}, base, {
-          id: q.id,
-          label: null,
-          matching: true,
-          pairs,
-          options: q.right.map((r) => ({ label: r.label, value: r.text }))
-        }));
       }
     }
   }
   return out;
 }
 
+// Subjects -> chapters -> exercises, carrying their cards. Only branches that
+// actually produced cards survive, so nothing unselectable is ever drawn.
+function buildTree(bank, cards) {
+  const subjects = [];
+  for (const s of bank.subjects) {
+    const chapters = [];
+    for (const ch of s.chapters) {
+      const key = s.id + '/' + ch.id;
+      const chCards = cards.filter((c) => c.chapterKey === key);
+      if (!chCards.length) continue;
+
+      const exercises = [];
+      const byKey = new Map();
+      for (const c of chCards) {
+        let ex = byKey.get(c.exKey);
+        if (!ex) {
+          ex = { key: c.exKey, id: c.exId, cards: [] };
+          byKey.set(c.exKey, ex);
+          exercises.push(ex);
+        }
+        ex.cards.push(c);
+      }
+      chapters.push({ key, id: ch.id, title: ch.title || ch.id,
+                      source: ch.source || null, cards: chCards, exercises });
+    }
+    if (!chapters.length) continue;
+    subjects.push({ id: s.id, title: s.title, color: s.color,
+                    chapters, cards: cards.filter((c) => c.subjectId === s.id) });
+  }
+  return { subjects };
+}
+
+function subjectById(id) { return TREE.subjects.find((s) => s.id === id) || null; }
+function chapterByKey(key) {
+  for (const s of TREE.subjects) {
+    const ch = s.chapters.find((c) => c.key === key);
+    if (ch) return { subject: s, chapter: ch };
+  }
+  return null;
+}
+
 function missingEntries(bank) {
   const out = [];
-  for (const ch of bank.chapters) {
-    for (const q of ch.questions) {
-      if (q.needs_question_text) out.push({ ch, q });
+  for (const subject of bank.subjects) {
+    for (const ch of subject.chapters) {
+      for (const q of ch.questions || []) {
+        if (q.needs_question_text) out.push({ subject, ch, q });
+      }
     }
   }
   return out;
 }
 
+/* ── Selection ─────────────────────────────────────────── */
+
+// The whole selection is one list of exercise keys; null means "everything".
+// A chapter is selected exactly when all of its exercises are.
+function allExerciseKeys() {
+  const out = [];
+  const seen = new Set();
+  for (const c of CARDS) {
+    if (seen.has(c.exKey)) continue;
+    seen.add(c.exKey);
+    out.push(c.exKey);
+  }
+  return out;
+}
+
+function setSelection(keys) {
+  if (!keys) { state.settings.exercises = null; saveState(); return; }
+  const all = allExerciseKeys();
+  const set = new Set(keys);
+  const next = all.filter((k) => set.has(k));   // canonical order, unknown keys dropped
+  state.settings.exercises = (next.length === all.length) ? null : next;
+  saveState();
+}
+
+function selectExercises(keys, on) {
+  const all = allExerciseKeys();
+  const set = new Set(state.settings.exercises || all);
+  for (const k of keys) { if (on) set.add(k); else set.delete(k); }
+  setSelection([...set]);
+}
+
+function isSelected(key) {
+  const sel = state.settings.exercises;
+  return !sel || sel.includes(key);
+}
+
+// 'all' | 'some' | 'none' over a list of exercise keys.
+function selectionState(keys) {
+  const n = keys.filter(isSelected).length;
+  return n === 0 ? 'none' : n === keys.length ? 'all' : 'some';
+}
+
+function chapterKeysOf(chapter) { return chapter.exercises.map((e) => e.key); }
+function subjectKeysOf(subject) {
+  return subject.chapters.reduce((acc, ch) => acc.concat(chapterKeysOf(ch)), []);
+}
+
 /* ── Filtering ─────────────────────────────────────────── */
 
-function activePool() {
+// `scope` narrows to where the user pressed Έναρξη: {subjectId} | {chapterKey}.
+// It is never persisted — only the exercise selection and the settings are. There is
+// no cross-subject scope: μια συνεδρία ζει πάντα μέσα σε ένα μάθημα. Ένα scope χωρίς
+// μάθημα δεν επιστρέφει όλη την τράπεζα — επιστρέφει τίποτα, ώστε να μη γεννηθεί
+// ποτέ ανάμεικτη συνεδρία από λάθος κλήση.
+function activePool(scope) {
   const s = state.settings;
+  const sc = scope || {};
+  // A chapter key carries its subject ("phys/9"), so either form pins exactly one.
+  const subjectId = sc.subjectId || (sc.chapterKey ? String(sc.chapterKey).split('/')[0] : null);
+  if (!subjectId) return [];
+  const exSet = s.exercises ? new Set(s.exercises) : null;
+  const tySet = s.types ? new Set(s.types) : null;
+
   return CARDS.filter((c) => {
-    if (s.chapters && !s.chapters.includes(c.chapterId)) return false;
-    if (s.exercises && !s.exercises.includes(c.exId)) return false;
-    if (s.types && !s.types.includes(c.type)) return false;
+    if (c.subjectId !== subjectId) return false;
+    if (sc.chapterKey && c.chapterKey !== sc.chapterKey) return false;
+    if (exSet && !exSet.has(c.exKey)) return false;
+    if (tySet && !tySet.has(c.type)) return false;
     const st = state.stats[c.id];
     if (s.onlyWrong && !(st && st.last === 'wrong')) return false;
     if (s.onlyUnseen && st && st.seen) return false;
     return true;
   });
+}
+
+function statsFor(cards) {
+  let answered = 0, correct = 0, tries = 0, wrong = 0;
+  for (const c of cards) {
+    const st = state.stats[c.id];
+    if (!st) continue;
+    if (st.seen > 0) answered++;
+    correct += st.correct || 0;
+    tries += (st.correct || 0) + (st.wrong || 0);
+    if (st.last === 'wrong') wrong++;
+  }
+  return { total: cards.length, answered, wrong,
+           pct: tries ? Math.round(100 * correct / tries) : null };
 }
 
 function shuffled(arr) {
@@ -257,99 +461,132 @@ function show(screenId) {
   window.scrollTo(0, 0);
 }
 
-/* ── Home ──────────────────────────────────────────────── */
+function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
 
-function renderChips(container, values, selected, labelFn, onToggle) {
+function poolText(n) {
+  return n ? plural(n, 'ερώτηση', 'ερωτήσεις') + ' στην επιλογή'
+           : 'Καμία ερώτηση με αυτά τα φίλτρα';
+}
+
+function heroHTML(st, color) {
+  return `<div class="ring-wrap">${progressRing(st.pct, 112, 9, color)}` +
+      `<div class="ring-label">` +
+        (st.pct === null ? '<b>—</b>' : `<b data-count="${st.pct}" data-suffix="%">0%</b>`) +
+        `<span>επιτυχία</span></div></div>` +
+    `<div class="hero-stats">` +
+      `<div class="hero-stat"><b>${st.answered}</b><span>από ${st.total} απαντημένες</span></div>` +
+      `<div class="hero-stat${st.wrong ? ' flag' : ''}"><b>${st.wrong}</b><span>για επανάληψη</span></div>` +
+    `</div>`;
+}
+
+/* ── Navigation ────────────────────────────────────────── */
+
+function goHome(animate) {
+  nav = { screen: 'home', subjectId: null, chapterKey: null };
+  renderHome(animate);
+  show('screen-home');
+}
+
+function goSubject(subjectId, animate) {
+  nav = { screen: 'subject', subjectId, chapterKey: null };
+  renderSubject(animate);
+  show('screen-subject');
+}
+
+function goChapter(chapterKey) {
+  const found = chapterByKey(chapterKey);
+  if (!found) return goHome(true);
+  nav = { screen: 'chapter', subjectId: found.subject.id, chapterKey };
+  renderChapter();
+  show('screen-chapter');
+}
+
+// Return to wherever the picker was left — used by ‹ and by quitting a session.
+function showCurrentNav() {
+  if (nav.screen === 'chapter' && chapterByKey(nav.chapterKey)) return goChapter(nav.chapterKey);
+  if (nav.screen === 'subject' && subjectById(nav.subjectId)) return goSubject(nav.subjectId, true);
+  return goHome(true);
+}
+
+/* ── Home: subjects ────────────────────────────────────── */
+
+function renderChips(container, items, isOn, onToggle) {
   container.innerHTML = '';
-  for (const v of values) {
+  for (const it of items) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'chip';
-    b.setAttribute('aria-pressed', String(!selected || selected.includes(v)));
-    b.innerHTML = labelFn(v);
-    b.addEventListener('click', () => onToggle(v));
+    b.setAttribute('aria-pressed', String(isOn(it.value)));
+    b.innerHTML = it.html;
+    b.addEventListener('click', () => onToggle(it.value));
     container.appendChild(b);
   }
 }
 
 function renderHome(animate) {
   const s = state.settings;
-  const chapters = BANK.chapters.map((c) => c.id);
-  const exercises = [];
-  for (const ch of BANK.chapters) {
-    for (const q of ch.questions) if (!q.needs_question_text) exercises.push(q.id);
+
+  $('home-stats').innerHTML = heroHTML(statsFor(CARDS), null);
+  animateStats($('home-stats'), animate);
+
+  // Subject cards
+  const list = $('subject-list');
+  list.innerHTML = '';
+  TREE.subjects.forEach((subject, i) => {
+    const st = statsFor(subject.cards);
+    const sel = selectionState(subjectKeysOf(subject));
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'row-card subject-card';
+    b.style.setProperty('--i', i);
+    b.innerHTML =
+      `<span class="ring-wrap small">${progressRing(st.pct, 48, 7, subject.color)}` +
+        `<span class="ring-mini">${st.pct === null ? '—' : st.pct + '%'}</span></span>` +
+      `<span class="row-body">` +
+        `<span class="row-title">${esc(subject.title)}</span>` +
+        `<span class="row-sub">${plural(st.total, 'ερώτηση', 'ερωτήσεις')} · ` +
+          `${plural(subject.chapters.length, 'κεφάλαιο', 'κεφάλαια')}` +
+          (sel === 'all' ? '' : sel === 'none' ? ' · <em>εκτός επιλογής</em>' : ' · <em>μερική επιλογή</em>') +
+        `</span>` +
+      `</span>` +
+      `<span class="row-chev" aria-hidden="true"></span>`;
+    b.addEventListener('click', () => goSubject(subject.id, true));
+    list.appendChild(b);
+  });
+  if (!TREE.subjects.length) {
+    list.innerHTML = '<p class="empty">Καμία ερώτηση ακόμη.</p>';
   }
-  const types = [...new Set(CARDS.map((c) => c.type))];
+  animateStats(list, animate);
 
-  const toggle = (key, all, v) => {
-    const cur = s[key] ? s[key].slice() : all.slice();
-    const i = cur.indexOf(v);
-    if (i >= 0) cur.splice(i, 1); else cur.push(v);
-    s[key] = (cur.length === all.length) ? null : cur;
-    if (cur.length === 0) s[key] = [];
-    saveState(); renderHome();
-  };
-
-  const chTitle = (id) => {
-    const ch = BANK.chapters.find((c) => c.id === id);
-    return esc(ch ? ch.title : id);
-  };
-
-  renderChips($('filter-chapters'), chapters, s.chapters, chTitle, (v) => toggle('chapters', chapters, v));
-  renderChips($('filter-exercises'), exercises, s.exercises, esc, (v) => toggle('exercises', exercises, v));
-  renderChips($('filter-types'), types, s.types, (t) => esc(TYPE_NAMES[t] || t), (v) => toggle('types', types, v));
-
+  // Settings
   $('opt-shuffle').checked = s.shuffle;
   $('opt-only-wrong').checked = s.onlyWrong;
   $('opt-only-unseen').checked = s.onlyUnseen;
 
-  // Overall stats
-  const known = new Set(CARDS.map((c) => c.id));
-  const ids = Object.keys(state.stats).filter((i) => known.has(i));
-  const answered = ids.filter((i) => state.stats[i].seen > 0).length;
-  const totalCorrect = ids.reduce((n, i) => n + (state.stats[i].correct || 0), 0);
-  const totalTries = ids.reduce((n, i) => n + (state.stats[i].correct || 0) + (state.stats[i].wrong || 0), 0);
-  const pct = totalTries ? Math.round(100 * totalCorrect / totalTries) : null;
-  const wrongNow = ids.filter((i) => state.stats[i].last === 'wrong').length;
+  const types = [...new Set(CARDS.map((c) => c.type))];
+  renderChips($('filter-types'),
+    types.map((t) => ({ value: t, html: esc(TYPE_NAMES[t] || t) })),
+    (t) => !s.types || s.types.includes(t),
+    (t) => {
+      const cur = s.types ? s.types.slice() : types.slice();
+      const i = cur.indexOf(t);
+      if (i >= 0) cur.splice(i, 1); else cur.push(t);
+      s.types = (cur.length === types.length) ? null : cur;
+      saveState(); renderHome();
+    });
 
-  $('home-stats').innerHTML =
-    `<div class="ring-wrap">${progressRing(pct, 112, 9)}` +
-      `<div class="ring-label">` +
-        (pct === null ? '<b>—</b>' : `<b data-count="${pct}" data-suffix="%">0%</b>`) +
-        `<span>επιτυχία</span></div></div>` +
-    `<div class="hero-stats">` +
-      `<div class="hero-stat"><b>${answered}</b><span>από ${CARDS.length} απαντημένες</span></div>` +
-      `<div class="hero-stat${wrongNow ? ' flag' : ''}"><b>${wrongNow}</b><span>για επανάληψη</span></div>` +
-    `</div>`;
-  animateStats($('home-stats'), animate);
-
-  // Section summaries, so the collapsed state still says what is selected.
-  const nCh = s.chapters ? s.chapters.length : chapters.length;
-  const nEx = s.exercises ? s.exercises.length : exercises.length;
-  const nTy = s.types ? s.types.length : types.length;
   const bits = [];
-  if (nCh !== chapters.length) bits.push(`${nCh} από ${chapters.length} κεφάλαια`);
-  bits.push(nEx === exercises.length ? 'όλες οι ασκήσεις'
-           : nEx === 1 ? '1 άσκηση' : `${nEx} ασκήσεις`);
-  if (nTy !== types.length) bits.push(nTy === 1 ? '1 τύπος' : `${nTy} τύποι`);
-  $('sum-filters').textContent = bits.join(' · ');
-
-  const on = [];
-  if (s.shuffle) on.push('Τυχαία σειρά');
-  if (s.onlyWrong) on.push('Μόνο λάθη');
-  if (s.onlyUnseen) on.push('Μόνο αναπάντητες');
-  $('sum-settings').textContent = on.length ? on.join(' · ') : 'Καμία';
-
-  $('sec-filters').open = !!s.openSections.filters;
+  if (s.shuffle) bits.push('Τυχαία σειρά');
+  if (s.onlyWrong) bits.push('Μόνο λάθη');
+  if (s.onlyUnseen) bits.push('Μόνο αναπάντητες');
+  if (s.types) bits.push(plural(s.types.length, 'τύπος', 'τύποι'));
+  $('sum-settings').textContent = bits.length ? bits.join(' · ') : 'Καμία';
   $('sec-settings').open = !!s.openSections.settings;
 
-  const pool = activePool();
-  $('pool-count').textContent = pool.length
-    ? `${pool.length} ${pool.length === 1 ? 'ερώτηση' : 'ερωτήσεις'} στην επιλογή`
-    : 'Καμία ερώτηση με αυτά τα φίλτρα';
-  $('btn-start').disabled = pool.length === 0;
-
+  // Bottom bar. Εξάσκηση ξεκινά πάντα μέσα σε ένα μάθημα, οπότε εδώ μένει μόνο το
+  // «Συνέχεια» — και μαζί του κρύβεται ολόκληρη η μπάρα, αλλιώς μένει ένα κενό ταμπλό.
   const canResume = state.session && state.session.i < state.session.ids.length;
+  $('home-actions').hidden = !canResume;
   $('btn-resume').hidden = !canResume;
   if (canResume) {
     $('btn-resume').textContent = `Συνέχεια (${state.session.i}/${state.session.ids.length})`;
@@ -357,18 +594,112 @@ function renderHome(animate) {
 
   const missing = missingEntries(BANK).length;
   $('btn-missing').textContent = missing ? `Λείπουν κείμενα (${missing})` : 'Λείπουν κείμενα';
+}
 
-  const allEx = !s.exercises || s.exercises.length === exercises.length;
-  $('btn-toggle-all-ex').textContent = allEx ? 'Καμία' : 'Επιλογή όλων';
-  $('btn-toggle-all-ex').onclick = () => {
-    s.exercises = allEx ? [] : null;
-    saveState(); renderHome();
+/* ── Subject: chapters ─────────────────────────────────── */
+
+// Tri-state box: all / some / none of the exercises underneath are selected.
+function cboxHTML(sel) {
+  return `<span class="cbox ${sel}" aria-hidden="true"></span>`;
+}
+
+function renderSubject(animate) {
+  const subject = subjectById(nav.subjectId);
+  if (!subject) return goHome(true);
+
+  $('subject-title').textContent = subject.title;
+  $('subject-stats').innerHTML = heroHTML(statsFor(subject.cards), subject.color);
+  animateStats($('subject-stats'), animate);
+
+  const list = $('chapter-list');
+  list.innerHTML = '';
+  subject.chapters.forEach((ch, i) => {
+    const st = statsFor(ch.cards);
+    const sel = selectionState(chapterKeysOf(ch));
+
+    const row = document.createElement('div');
+    row.className = 'row-card row-split';
+    row.style.setProperty('--i', i);
+
+    const main = document.createElement('button');
+    main.type = 'button';
+    main.className = 'row-main';
+    main.setAttribute('aria-pressed', sel === 'all' ? 'true' : sel === 'some' ? 'mixed' : 'false');
+    main.innerHTML = cboxHTML(sel) +
+      `<span class="row-body">` +
+        `<span class="row-title">${esc(ch.title)}</span>` +
+        `<span class="row-sub">${plural(st.total, 'ερώτηση', 'ερωτήσεις')}` +
+          (st.pct === null ? '' : ` · ${st.pct}% επιτυχία`) +
+        `</span>` +
+      `</span>`;
+    main.addEventListener('click', () => {
+      selectExercises(chapterKeysOf(ch), sel !== 'all');
+      renderSubject();
+    });
+
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'row-more';
+    more.setAttribute('aria-label', 'Ασκήσεις: ' + ch.title);
+    more.innerHTML = '<span class="row-chev" aria-hidden="true"></span>';
+    more.addEventListener('click', () => goChapter(ch.key));
+
+    row.appendChild(main);
+    row.appendChild(more);
+    list.appendChild(row);
+  });
+
+  const allSel = selectionState(subjectKeysOf(subject));
+  $('btn-toggle-all-ch').textContent = allSel === 'all' ? 'Κανένα' : 'Επιλογή όλων';
+  $('btn-toggle-all-ch').onclick = () => {
+    selectExercises(subjectKeysOf(subject), allSel !== 'all');
+    renderSubject();
   };
+
+  const pool = activePool({ subjectId: subject.id });
+  $('subject-pool').textContent = poolText(pool.length);
+  $('btn-start-subject').disabled = pool.length === 0;
+}
+
+/* ── Chapter: exercises ────────────────────────────────── */
+
+function renderChapter() {
+  const found = chapterByKey(nav.chapterKey);
+  if (!found) return goHome(true);
+  const { subject, chapter } = found;
+
+  // The chapter id is only a storage key — two source books both number their
+  // chapters from 1, so showing it would print "ox1" at the reader.
+  $('chapter-title').textContent = chapter.title;
+  // The chapter's source line usually opens with the subject name already
+  // ("Χημεία, σελ. 56–62") — μην το γράψεις δύο φορές.
+  const src = chapter.source || '';
+  $('chapter-sub').textContent = src.indexOf(subject.title) === 0
+    ? src
+    : subject.title + (src ? ' · ' + src : '');
+
+  renderChips($('filter-exercises'),
+    chapter.exercises.map((e) => ({ value: e.key, html: esc(e.id) })),
+    isSelected,
+    (key) => { selectExercises([key], !isSelected(key)); renderChapter(); });
+
+  const keys = chapterKeysOf(chapter);
+  const sel = selectionState(keys);
+  $('btn-toggle-all-ex').textContent = sel === 'all' ? 'Καμία' : 'Επιλογή όλων';
+  $('btn-toggle-all-ex').onclick = () => {
+    selectExercises(keys, sel !== 'all');
+    renderChapter();
+  };
+
+  const pool = activePool({ chapterKey: chapter.key });
+  $('chapter-pool').textContent = poolText(pool.length);
+  $('btn-start-chapter').disabled = pool.length === 0;
 }
 
 /* ── Quiz ──────────────────────────────────────────────── */
 
 function startSession(cards, mode) {
+  if (!cards.length) return;
   const list = state.settings.shuffle ? shuffled(cards) : cards;
   state.session = { ids: list.map((c) => c.id), i: 0, answers: {}, mode: mode || 'practice' };
   saveState();
@@ -378,6 +709,12 @@ function startSession(cards, mode) {
 
 function cardById(id) { return CARDS.find((c) => c.id === id); }
 
+function subjectChip(card) {
+  const tint = safeColor(card.subjectColor);
+  return `<span class="badge subject-chip"${tint ? ` style="background:${tint}"` : ''}>` +
+         `${esc(card.subjectTitle)}</span>`;
+}
+
 function renderCard() {
   const sess = state.session;
   if (!sess || sess.i >= sess.ids.length) return renderResults();
@@ -385,34 +722,37 @@ function renderCard() {
   const card = cardById(sess.ids[sess.i]);
   if (!card) { sess.i++; return renderCard(); }
 
+  const F = (t) => formatSci(t, card.autoFormat);
+
   const answeredCount = Object.keys(sess.answers).length;
   const correctCount = Object.values(sess.answers).filter((a) => a.ok).length;
   $('progress-fill').style.width = (100 * sess.i / sess.ids.length) + '%';
   $('score').textContent = `${correctCount}/${answeredCount}`;
 
-  const badge = `<span class="badge">${esc(card.exId)}${card.label ? ' · ' + esc(card.label) : ''}</span>` +
+  const badge = subjectChip(card) +
+    `<span class="badge">${esc(card.exId)}${card.label ? ' · ' + esc(card.label) : ''}</span>` +
     (card.section ? `<span class="badge section-tag">${esc(card.section)}</span>` : '');
 
-  const instr = card.instructions ? `<p class="instructions">${formatChem(card.instructions)}</p>` : '';
+  const instr = card.instructions ? `<p class="instructions">${F(card.instructions)}</p>` : '';
 
   if (card.matching) return renderMatchCard(card, badge, instr);
 
   let stemHTML;
   if (card.twoUp) {
-    stemHTML = `<p class="stem"><span class="sub-label">${esc(card.label)})</span>${formatChem(card.stem)}</p>`;
+    stemHTML = `<p class="stem"><span class="sub-label">${esc(card.label)})</span>${F(card.stem)}</p>`;
   } else {
-    stemHTML = `<p class="stem">${formatChem(card.stem)}</p>`;
+    stemHTML = `<p class="stem">${F(card.stem)}</p>`;
   }
 
   const optClass = card.twoUp ? 'options two-up' : 'options';
   const opts = card.options.map((o, i) =>
     `<button class="option" type="button" style="--i:${i}" data-label="${esc(o.label)}">` +
     `<span class="opt-label">${card.twoUp ? '' : esc(o.label) + ')'}</span>` +
-    `<span class="opt-text">${optionHTML(o.value)}</span>` +
+    `<span class="opt-text">${optionHTML(o.value, card.autoFormat)}</span>` +
     `<span class="mark"></span></button>`
   ).join('');
 
-  $('card-wrap').innerHTML = badge + instr + stemHTML +
+  $('card-wrap').innerHTML = `<div class="badges">${badge}</div>` + instr + stemHTML +
     `<div class="${optClass}" id="options">${opts}</div><div id="feedback"></div>`;
 
   $('btn-next').hidden = true;
@@ -439,11 +779,14 @@ function matchDraft(cardId) {
 }
 
 function renderMatchCard(card, badge, instr) {
+  const F = (t) => formatSci(t, card.autoFormat);
+  const O = (v) => optionHTML(v, card.autoFormat);
+
   const rows = card.pairs.map((p, i) =>
     `<button class="mrow" type="button" style="--i:${i}" data-left="${esc(p.label)}">` +
       `<span class="mrow-main">` +
         `<span class="mrow-label">${esc(p.label)})</span>` +
-        `<span class="mrow-text">${formatChem(p.text)}</span>` +
+        `<span class="mrow-text">${F(p.text)}</span>` +
         `<span class="mrow-slot"></span>` +
       `</span>` +
       `<span class="mrow-extra"></span>` +
@@ -452,10 +795,10 @@ function renderMatchCard(card, badge, instr) {
   const pool = card.options.map((o, i) =>
     `<button class="mopt" type="button" style="--i:${i}" data-right="${esc(o.label)}">` +
       `<span class="mopt-label">${esc(o.label)})</span>` +
-      `<span class="mopt-text">${optionHTML(o.value)}</span>` +
+      `<span class="mopt-text">${O(o.value)}</span>` +
     `</button>`).join('');
 
-  $('card-wrap').innerHTML = badge + instr +
+  $('card-wrap').innerHTML = `<div class="badges">${badge}</div>` + instr +
     `<div class="match">` +
       `<div class="match-rows" id="match-rows">${rows}</div>` +
       `<p class="match-hint" id="match-hint"></p>` +
@@ -488,7 +831,7 @@ function renderMatchCard(card, badge, instr) {
       const slot = row.querySelector('.mrow-slot');
       if (assigned) {
         const o = card.options.find((x) => x.label === assigned);
-        slot.innerHTML = `<span class="slot-label">${esc(assigned)})</span> ${optionHTML(o.value)}`;
+        slot.innerHTML = `<span class="slot-label">${esc(assigned)})</span> ${O(o.value)}`;
       } else {
         slot.textContent = l === active ? '…' : '';
       }
@@ -564,6 +907,9 @@ function gradeMatch(card) {
 }
 
 function lockMatchCard(card, map, detail) {
+  const F = (t) => formatSci(t, card.autoFormat);
+  const O = (v) => optionHTML(v, card.autoFormat);
+
   const pool = $('match-pool');
   if (pool) pool.remove();
   const hint = $('match-hint');
@@ -583,13 +929,13 @@ function lockMatchCard(card, map, detail) {
 
     const givenOpt = card.options.find((o) => o.label === given);
     row.querySelector('.mrow-slot').innerHTML =
-      (given ? `<span class="slot-label">${esc(given)})</span> ${optionHTML(givenOpt.value)} ` : '') +
+      (given ? `<span class="slot-label">${esc(given)})</span> ${O(givenOpt.value)} ` : '') +
       `<span class="slot-mark">${good ? '✓' : '✕'}</span>`;
 
     const rightOpt = card.options.find((o) => o.label === p.correct);
     row.querySelector('.mrow-extra').innerHTML =
-      (good ? '' : `<span class="mrow-correct">Σωστό: <b>${esc(p.correct)})</b> ${optionHTML(rightOpt.value)}</span>`) +
-      (p.explanation ? `<span class="mrow-why">${formatChem(p.explanation)}</span>` : '');
+      (good ? '' : `<span class="mrow-correct">Σωστό: <b>${esc(p.correct)})</b> ${O(rightOpt.value)}</span>`) +
+      (p.explanation ? `<span class="mrow-why">${F(p.explanation)}</span>` : '');
   }
 
   const total = card.pairs.length;
@@ -648,7 +994,8 @@ function lockCard(card, chosen) {
   if (card.twoUp) {
     answerLine = `Σωστή απάντηση: <b>${card.correct === 'true' ? 'Σωστό' : 'Λάθος'}</b>`;
   } else {
-    answerLine = `Σωστή απάντηση: <b>${esc(card.correct)})</b> ${optionHTML(correctOpt ? correctOpt.value : '')}`;
+    answerLine = `Σωστή απάντηση: <b>${esc(card.correct)})</b> ` +
+                 optionHTML(correctOpt ? correctOpt.value : '', card.autoFormat);
   }
 
   $('feedback').innerHTML =
@@ -656,7 +1003,7 @@ function lockCard(card, chosen) {
     `<div class="fb-head"><span class="fb-icon">${ok ? '✓' : '✕'}</span>` +
     `<h3>${ok ? 'Σωστά' : 'Λάθος'}</h3></div>` +
     (ok ? '' : `<p>${answerLine}</p>`) +
-    (card.explanation ? `<p class="why"><b>Αιτιολόγηση:</b> ${formatChem(card.explanation)}</p>` : '') +
+    (card.explanation ? `<p class="why"><b>Αιτιολόγηση:</b> ${formatSci(card.explanation, card.autoFormat)}</p>` : '') +
     `</div>`;
 
   const sess = state.session;
@@ -704,13 +1051,16 @@ function renderResults() {
   if (missed.length) {
     html += `<p class="list-head">${missed.length === 1 ? 'Το λάθος' : 'Τα λάθη'}</p>`;
     html += '<ul class="miss-list">' + missed.map(({ card: c, ans: a }) => {
-      const head = `<div class="miss-id">${esc(c.exId)}${c.label ? ' · ' + esc(c.label) : ''}</div>`;
+      const F = (t) => formatSci(t, c.autoFormat);
+      const O = (v) => optionHTML(v, c.autoFormat);
+      const head = `<div class="miss-id">${esc(c.subjectTitle)} · ${esc(c.exId)}` +
+                   `${c.label ? ' · ' + esc(c.label) : ''}</div>`;
 
       if (c.matching) {
         const bad = c.pairs.filter((p) => !(a.detail || {})[p.label]);
         const lines = bad.map((p) => {
           const co = c.options.find((o) => o.label === p.correct);
-          return `<li>${formatChem(p.text)} → <b>${esc(p.correct)})</b> ${optionHTML(co.value)}</li>`;
+          return `<li>${F(p.text)} → <b>${esc(p.correct)})</b> ${O(co.value)}</li>`;
         }).join('');
         return `<li>${head}<p class="miss-q">Αντιστοίχιση — ${a.score} από ${c.pairs.length} σωστές</p>` +
                `<ul class="miss-pairs">${lines}</ul></li>`;
@@ -719,9 +1069,9 @@ function renderResults() {
       const co = c.options.find((o) => o.label === c.correct);
       const ansTxt = c.twoUp
         ? (c.correct === 'true' ? 'Σωστό' : 'Λάθος')
-        : esc(c.correct) + ') ' + optionHTML(co ? co.value : '');
+        : esc(c.correct) + ') ' + O(co ? co.value : '');
       return `<li>${head}` +
-             `<p class="miss-q">${formatChem(c.stem)}</p>` +
+             `<p class="miss-q">${F(c.stem)}</p>` +
              `<p class="miss-a">Σωστή απάντηση: ${ansTxt}</p></li>`;
     }).join('') + '</ul>';
   } else if (total) {
@@ -745,9 +1095,9 @@ function renderResults() {
 function renderMissing() {
   const list = missingEntries(BANK);
   $('missing-body').innerHTML = list.length
-    ? '<ul class="miss-list">' + list.map(({ ch, q }) =>
-        `<li><div class="miss-id">${esc(q.id)}</div>` +
-        `<p class="miss-q">${esc(ch.title)} · ${esc(TYPE_NAMES[q.type] || q.type)}</p>` +
+    ? '<ul class="miss-list">' + list.map(({ subject, ch, q }) =>
+        `<li><div class="miss-id">${esc(subject.title)} · ${esc(q.id)}</div>` +
+        `<p class="miss-q">${esc(ch.title || ch.id)} · ${esc(TYPE_NAMES[q.type] || q.type)}</p>` +
         (q.note ? `<p class="miss-a">${esc(q.note)}</p>` : '') + '</li>').join('') + '</ul>'
     : '<p class="empty">Καμία — όλες οι ασκήσεις έχουν εκφώνηση.</p>';
   show('screen-missing');
@@ -834,8 +1184,7 @@ function dismissInstall() {
   state.settings.installDismissed = true;
   saveState();
   updateInstallLink();
-  renderHome(true);
-  show('screen-home');
+  goHome(true);
 }
 
 function updateInstallLink() {
@@ -859,33 +1208,34 @@ window.addEventListener('appinstalled', () => {
 /* ── Wiring ────────────────────────────────────────────── */
 
 function wire() {
-  on('btn-start', 'click', () => {
-    const pool = activePool();
-    if (pool.length) startSession(pool, 'practice');
-  });
+  on('btn-start-subject', 'click', () => startSession(activePool({ subjectId: nav.subjectId }), 'practice'));
+  on('btn-start-chapter', 'click', () => startSession(activePool({ chapterKey: nav.chapterKey }), 'practice'));
+
+  on('btn-subject-back', 'click', () => goHome(true));
+  on('btn-chapter-back', 'click', () => goSubject(nav.subjectId, true));
+
   on('btn-resume', 'click', () => { show('screen-quiz'); renderCard(); });
   on('btn-next', 'click', nextCard);
-  on('btn-quit', 'click', () => { renderHome(true); show('screen-home'); });
-  on('btn-home', 'click', () => { renderHome(true); show('screen-home'); });
+  on('btn-quit', 'click', showCurrentNav);
+  on('btn-home', 'click', () => goHome(true));
   on('btn-missing', 'click', renderMissing);
   on('btn-install', 'click', doInstall);
   on('btn-skip-install', 'click', dismissInstall);
   on('btn-install-again', 'click', () => { renderInstall(); show('screen-install'); });
-  on('btn-missing-back', 'click', () => { renderHome(true); show('screen-home'); });
+  on('btn-missing-back', 'click', showCurrentNav);
 
-  // Remember which sections the user left open.
-  for (const [id, key] of [['sec-filters', 'filters'], ['sec-settings', 'settings']]) {
-    on(id, 'toggle', () => {
-      if (state.settings.openSections[key] === $(id).open) return;
-      state.settings.openSections[key] = $(id).open;
-      saveState();
-    });
-  }
+  // Remember whether the settings drawer was left open.
+  on('sec-settings', 'toggle', () => {
+    if (state.settings.openSections.settings === $('sec-settings').open) return;
+    state.settings.openSections.settings = $('sec-settings').open;
+    saveState();
+  });
 
   for (const [id, key] of [['opt-shuffle', 'shuffle'], ['opt-only-wrong', 'onlyWrong'], ['opt-only-unseen', 'onlyUnseen']]) {
     on(id, 'change', (e) => {
       state.settings[key] = e.target.checked;
-      saveState(); renderHome();
+      saveState();
+      renderHome();
     });
   }
 
@@ -894,7 +1244,8 @@ function wire() {
     const keep = state.settings;
     state = defaultState();
     state.settings = keep;
-    saveState(); renderHome(true);
+    saveState();
+    goHome(true);
   });
 }
 
@@ -902,26 +1253,43 @@ function wire() {
 
 function bootError(e) {
   $('boot-msg').innerHTML =
-    '<strong>Δεν φορτώθηκε το questions.json.</strong>' +
+    '<strong>Δεν φορτώθηκε η τράπεζα ερωτήσεων.</strong>' +
     '<p>Η εφαρμογή χρειάζεται σέρβερ (το <code>file://</code> δεν επιτρέπει fetch). Από τον φάκελο της εφαρμογής:</p>' +
     '<pre>python3 -m http.server 8000</pre>' +
     '<p>και άνοιξε <code>http://localhost:8000</code></p>' +
     '<p style="opacity:.6">' + esc(e && e.message ? e.message : e) + '</p>';
 }
 
+async function fetchJSON(url) {
+  const res = await fetch(url, { cache: 'no-cache' });
+  if (!res.ok) throw new Error(url + ' — HTTP ' + res.status);
+  return res.json();
+}
+
 async function boot() {
   state = loadState();
   try {
-    const res = await fetch('questions.json', { cache: 'no-cache' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const raw = await res.json();
-    // Accept both the wrapped shape and a bare single-chapter object.
-    BANK = raw.chapters ? raw : { version: 1, chapters: [Object.assign({ id: '1' }, raw, { title: raw.chapter || 'Κεφάλαιο' })] };
+    const index = await fetchJSON('data/index.json');
+    if (!Array.isArray(index.subjects)) throw new Error('data/index.json: λείπει το subjects');
+
+    const files = await Promise.all(index.subjects.map((e) => fetchJSON(e.file)));
+    BANK = {
+      subjects: index.subjects.map((e, i) => ({
+        id: e.id,
+        title: e.title || files[i].title || e.id,
+        color: safeColor(e.color) || SUBJECT_COLORS[i % SUBJECT_COLORS.length],
+        autoFormat: e.autoFormat || null,
+        chapters: files[i].chapters || []
+      }))
+    };
   } catch (e) {
     return bootError(e);
   }
 
   CARDS = buildCards(BANK);
+  TREE = buildTree(BANK, CARDS);
+  if (freshState) migrateLegacy();
+
   $('boot').hidden = true;
   $('app').hidden = false;
   wire();

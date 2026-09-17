@@ -1,4 +1,4 @@
-/* Χημεία Quiz — phone-first. No external assets, no webfonts. */
+/* Exam Prep — phone-first. No external assets, no webfonts. */
 
 /* ── Tokens ─────────────────────────────────────────────── */
 :root {
@@ -361,6 +361,97 @@ button, input { font: inherit; color: inherit; touch-action: manipulation; }
 .actions-sticky.stacked { flex-direction: column; gap: 2px; }
 .actions-sticky.stacked .btn { width: 100%; }
 
+/* ── Picker rows (subjects, chapters) ───────────────────── */
+.nav-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: max(8px, env(safe-area-inset-top)) 0 4px;
+}
+.nav-bar h2 {
+  margin: 0; min-width: 0;
+  font-size: 25px; font-weight: 800; letter-spacing: -.03em; line-height: 1.2;
+}
+.nav-sub { margin: 4px 0 0 54px; color: var(--text-dim); font-size: 14px; }
+
+.sec-head.bare { margin: 24px 4px 10px; }
+
+.card-list { display: flex; flex-direction: column; gap: 10px; }
+
+.row-card {
+  display: flex; align-items: center; gap: 14px; width: 100%;
+  min-height: var(--tap); padding: 14px 16px; text-align: left;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-1);
+  cursor: pointer;
+  animation: optionIn .38s var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 45ms + 60ms);
+  transition: transform .12s var(--ease-out), border-color .2s, background .2s;
+}
+.row-card:not(.row-split):active { transform: scale(.985); }
+
+/* Split row: the body toggles the checkbox, the tail opens the level below. */
+.row-card.row-split { padding: 0; gap: 0; overflow: hidden; }
+.row-main {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 14px;
+  min-height: var(--tap); padding: 13px 6px 13px 16px; text-align: left;
+  background: none; border: none; cursor: pointer;
+  transition: background .18s;
+}
+.row-main:active { background: var(--surface-2); }
+.row-more {
+  flex: none; width: 52px; align-self: stretch;
+  display: grid; place-items: center;
+  background: none; border: none;
+  border-left: 1.5px solid var(--border);
+  cursor: pointer;
+  transition: background .18s;
+}
+.row-more:active { background: var(--surface-2); }
+
+.row-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.row-title { font-size: 17px; font-weight: 650; letter-spacing: -.015em; }
+.row-sub { font-size: 14px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.row-sub em { font-style: normal; color: var(--accent); font-weight: 650; white-space: nowrap; }
+
+.row-chev {
+  flex: none; width: 9px; height: 9px;
+  border-right: 2.2px solid var(--text-dim);
+  border-bottom: 2.2px solid var(--text-dim);
+  border-radius: 1px;
+  transform: rotate(-45deg);
+}
+
+/* Tri-state box: every / some / none of the exercises below are selected. */
+.cbox {
+  flex: none; position: relative;
+  width: 24px; height: 24px; border-radius: 8px;
+  border: 2px solid var(--border);
+  background: var(--surface-2);
+  transition: background .18s, border-color .18s;
+}
+.cbox.all, .cbox.some { background: var(--accent); border-color: var(--accent); }
+.cbox.all::after {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  width: 5px; height: 10px;
+  border-right: 2.4px solid #fff;
+  border-bottom: 2.4px solid #fff;
+  transform: translate(-50%, -60%) rotate(42deg);
+}
+.cbox.some::after {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  width: 11px; height: 2.4px; border-radius: 2px; background: #fff;
+  transform: translate(-50%, -50%);
+}
+
+/* Small ring used on a subject card. */
+.ring-mini {
+  position: absolute;
+  font-size: 12px; font-weight: 800; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── Quiz bar ───────────────────────────────────────────── */
 .quiz-bar {
   display: flex; align-items: center; gap: 14px;
@@ -402,6 +493,9 @@ button, input { font: inherit; color: inherit; touch-action: manipulation; }
 .card-wrap { padding-top: 4px; animation: cardIn .34s var(--ease-out) both; }
 @keyframes cardIn { from { opacity: 0; transform: translateY(14px); } }
 
+.badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.subject-chip { background: var(--accent); }
+
 .badge {
   display: inline-block;
   padding: 5px 12px;
@@ -412,7 +506,7 @@ button, input { font: inherit; color: inherit; touch-action: manipulation; }
 }
 .badge.section-tag {
   background: var(--surface-2); color: var(--text-dim);
-  margin-left: 6px; font-weight: 600;
+  font-weight: 600;
 }
 .instructions { margin: 14px 0 0; color: var(--text-dim); font-size: 14px; line-height: 1.45; }
 .stem {

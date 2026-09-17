@@ -69,36 +69,42 @@ function distToSegment(px, py, ax, ay, bx, by) {
   return Math.hypot(px - cx, py - cy);
 }
 
+// Signed distance to a rounded box centred on (cx, cy): negative inside.
+function distToRoundedBox(px, py, cx, cy, half, radius) {
+  const qx = Math.abs(px - cx) - (half - radius);
+  const qy = Math.abs(py - cy) - (half - radius);
+  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) +
+         Math.min(Math.max(qx, qy), 0) - radius;
+}
+
+// A ticked answer box: subject-neutral, and still legible at 48px.
 // scale: 1.0 fills the tile; 0.72 keeps clear of a maskable icon's safe zone.
 function draw(size, scale) {
   const buf = Buffer.alloc(size * size * 3);
   const cx = 0.5, cy = 0.5;
-  const R = 0.30 * scale;          // bond length
-  const rC = 0.135 * scale;        // central atom
-  const rO = 0.093 * scale;        // outer atoms
-  const bond = 0.042 * scale;      // bond half-width
+  const half = 0.30 * scale;       // box half-extent
+  const radius = 0.10 * scale;     // corner rounding
+  const frame = 0.030 * scale;     // box stroke half-width
+  const tick = 0.040 * scale;      // check stroke half-width
 
-  const atoms = [[cx, cy]];
-  for (const deg of [-90, 30, 150]) {
-    const a = (deg * Math.PI) / 180;
-    atoms.push([cx + R * Math.cos(a), cy + R * Math.sin(a)]);
-  }
+  // Check mark, relative to the centre of the tile.
+  const pts = [[-0.150, 0.005], [-0.040, 0.115], [0.155, -0.095]]
+    .map(([x, y]) => [cx + x * scale, cy + y * scale]);
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const u = (x + 0.5) / size, v = (y + 0.5) / size;
       let ink = 0;
 
-      for (let i = 1; i < atoms.length; i++) {
-        const d = distToSegment(u, v, atoms[0][0], atoms[0][1], atoms[i][0], atoms[i][1]);
-        ink = Math.max(ink, coverage(d, bond, size));
-      }
-      ink = Math.max(ink, coverage(Math.hypot(u - atoms[0][0], v - atoms[0][1]), rC, size));
-      for (let i = 1; i < atoms.length; i++) {
-        ink = Math.max(ink, coverage(Math.hypot(u - atoms[i][0], v - atoms[i][1]), rO, size));
+      const box = distToRoundedBox(u, v, cx, cy, half, radius);
+      ink = Math.max(ink, coverage(Math.abs(box), frame, size));
+
+      for (let i = 1; i < pts.length; i++) {
+        const d = distToSegment(u, v, pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
+        ink = Math.max(ink, coverage(d, tick, size));
       }
 
-      // 135° gradient across the tile, then the white molecule on top.
+      // 135° gradient across the tile, then the white mark on top.
       const g = Math.max(0, Math.min(1, (u + v) / 2));
       const o = (y * size + x) * 3;
       for (let c = 0; c < 3; c++) {

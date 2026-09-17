@@ -2,8 +2,8 @@
 !index.html
 !styles.css
 !app.js
-!questions.json
 !manifest.webmanifest
 !sw.js
+!data
 !icons
 !nginx.conf

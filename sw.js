@@ -1,5 +1,5 @@
-/* Offline support. Bump CACHE_VERSION whenever questions.json or the shell changes. */
-const CACHE_VERSION = 'chemquiz-v4';
+/* Offline support. Bump CACHE_VERSION whenever the bank or the shell changes. */
+const CACHE_VERSION = 'examprep-v8';
 const SHELL = [
   './',
   'index.html',
@@ -12,14 +12,29 @@ const SHELL = [
   'icons/apple-touch-icon-180.png'
 ];
 
+// cache:'reload' so a CACHE_VERSION bump can't re-cache stale HTTP copies.
+const fresh = (u) => new Request(u, { cache: 'reload' });
+
 self.addEventListener('install', (e) => {
-  e.waitUntil(
-    caches.open(CACHE_VERSION)
-      // cache:'reload' so a CACHE_VERSION bump can't re-cache stale HTTP copies.
-      .then((c) => c.addAll(
-        SHELL.concat(['questions.json']).map((u) => new Request(u, { cache: 'reload' }))))
-      .then(() => self.skipWaiting())
-  );
+  e.waitUntil((async () => {
+    const cache = await caches.open(CACHE_VERSION);
+
+    // The subject files are whatever the catalogue names, so it has to be read
+    // before the precache list can be built.
+    const indexReq = fresh('data/index.json');
+    const indexRes = await fetch(indexReq);
+    if (!indexRes.ok) throw new Error('data/index.json — HTTP ' + indexRes.status);
+    const index = await indexRes.clone().json();
+    const files = (index.subjects || []).map((s) => s.file).filter(Boolean);
+
+    // Any failure here rejects the install, so the previous worker stays active and
+    // keeps serving. That beats going live with a half-filled cache.
+    await cache.addAll(SHELL.map(fresh));
+    await cache.addAll(files.map(fresh));
+    await cache.put(indexReq, indexRes);
+
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', (e) => {
@@ -46,8 +61,9 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // The question bank changes as the bank grows: prefer the network, fall back to cache.
-  if (url.pathname.endsWith('questions.json')) {
+  // The bank grows as subjects and chapters are added: prefer the network, fall
+  // back to cache. Matched on the path so a sub-path deployment works too.
+  if (url.pathname.indexOf('/data/') !== -1) {
     e.respondWith(
       fetch(req)
         .then((res) => {

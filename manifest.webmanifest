@@ -1,7 +1,7 @@
 {
-  "name": "Χημεία — Εξάσκηση",
-  "short_name": "Χημεία",
-  "description": "Εξάσκηση σε ερωτήσεις χημείας από το σχολικό βιβλίο.",
+  "name": "Exam Prep",
+  "short_name": "Exam Prep",
+  "description": "Εξάσκηση σε ερωτήσεις από τα σχολικά βιβλία.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
