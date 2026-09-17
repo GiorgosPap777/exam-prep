@@ -89,6 +89,7 @@ docker build -t exam-prep .
 ```
 data/index.json        ο κατάλογος των μαθημάτων
 data/chemistry.json    ένα αρχείο ανά μάθημα
+data/physics.json
 ```
 
 Έλεγχος ακεραιότητας — όλα τα μαθήματα ή ένα μόνο αρχείο:

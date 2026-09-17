@@ -7,6 +7,12 @@
       "file": "data/chemistry.json",
       "color": "#6366F1",
       "autoFormat": "chemistry"
+    },
+    {
+      "id": "phys",
+      "title": "Φυσική",
+      "file": "data/physics.json",
+      "color": "#0EA5E9"
     }
   ]
 }
